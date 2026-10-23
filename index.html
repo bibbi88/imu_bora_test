@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>IMU Vario Lab</title>
+<style>
+:root{
+  --bg:#0f1216;--panel:#181d23;--line:#2a313a;--text:#e8edf2;--muted:#8b97a5;
+  --baro:#f0a24a;--acc:#c48bff;--gyro:#4fb3ff;--os:#4fd1c5;--truth:#e8edf2;
+  --warn:#ff6b6b;--ok:#5fd38d;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.35 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+body{padding:10px 12px calc(10px + env(safe-area-inset-bottom))}
+h1{font-size:17px;margin:0 0 8px;font-weight:650}
+h1 span{color:var(--muted);font-weight:400;font-size:13px;margin-left:6px}
+.grid{display:grid;gap:10px;grid-template-columns:1fr}
+@media (min-width:860px){.grid{grid-template-columns:360px 1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+button,select{min-height:48px;padding:0 14px;border-radius:10px;border:1px solid var(--line);
+  background:#222a33;color:var(--text);font:600 15px system-ui,sans-serif;cursor:pointer}
+button.on{background:#1f4a6e;border-color:var(--gyro)}
+button:disabled{opacity:.45}
+select{font-weight:500}
+.big{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0}
+.num{background:#11161b;border:1px solid var(--line);border-radius:10px;padding:6px 10px}
+.num .l{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}
+.num .v{font:700 34px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace;font-variant-numeric:tabular-nums}
+.small{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;font-size:12px}
+.small div{background:#11161b;border-radius:8px;padding:5px 8px;color:var(--muted)}
+.small b{display:block;font:600 15px ui-monospace,monospace;color:var(--text)}
+.status{font-size:13px;color:var(--muted);min-height:18px;margin-top:6px}
+.status .ok{color:var(--ok)} .status .bad{color:var(--warn)}
+canvas{width:100%;height:320px;display:block;background:#0c0f13;border-radius:10px}
+.legend{display:flex;gap:6px;flex-wrap:wrap}
+.legend button{min-height:38px;padding:0 10px;font-size:13px;font-weight:500}
+.legend button i{display:inline-block;width:14px;height:3px;border-radius:2px;margin-right:6px;vertical-align:middle}
+.legend button.off{opacity:.35}
+table{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px;font-variant-numeric:tabular-nums}
+th,td{padding:6px 6px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:500;font-size:12px}
+.note{font-size:13px;color:var(--muted);margin-top:6px}
+label.s{display:block;font-size:13px;color:var(--muted);margin-top:8px}
+label.s output{color:var(--text);float:right;font-family:ui-monospace,monospace}
+input[type=range]{width:100%;height:32px}
+details{margin-top:8px}
+summary{cursor:pointer;color:var(--muted);font-size:13px;padding:6px 0}
+.help{font-size:13px;color:var(--muted);padding-left:18px}
+.help li{margin:4px 0}
+</style>
+</head>
+<body>
+<h1>IMU Vario Lab <span>Bora baro + phone IMU · four varios side by side</span></h1>
+
+<div class="grid">
+  <div class="panel">
+    <div class="row">
+      <button id="btnBora">Connect Bora</button>
+      <button id="btnImu">Start phone IMU</button>
+      <button id="btnSim">Simulator</button>
+    </div>
+    <div class="status" id="status">Not connected.</div>
+
+    <div class="big">
+      <div class="num"><div class="l">Baro only</div><div class="v" id="v_baro" style="color:var(--baro)">–.–</div></div>
+      <div class="num"><div class="l">Baro + acc</div><div class="v" id="v_acc" style="color:var(--acc)">–.–</div></div>
+      <div class="num"><div class="l">Baro + acc + gyro</div><div class="v" id="v_gyro" style="color:var(--gyro)">–.–</div></div>
+      <div class="num"><div class="l">Baro + OS fusion</div><div class="v" id="v_os" style="color:var(--os)">–.–</div></div>
+    </div>
+    <div class="small">
+      <div>Altitude<b id="oAlt">–</b></div>
+      <div>Bank (gyro)<b id="oBank">–</b></div>
+      <div>Bank (OS)<b id="oBankOs">–</b></div>
+      <div>Baro rate<b id="oBhz">–</b></div>
+      <div>IMU rate<b id="oIhz">–</b></div>
+      <div>Gyro data<b id="oGyro">–</b></div>
+    </div>
+
+    <div class="row" style="margin-top:10px">
+      <select id="selAudio" aria-label="Audio source">
+        <option value="off">Sound: off</option>
+        <option value="baro">Sound: baro only</option>
+        <option value="acc">Sound: baro + acc</option>
+        <option value="gyro">Sound: baro + acc + gyro</option>
+        <option value="os">Sound: baro + OS fusion</option>
+      </select>
+      <button id="btnRec">● Record</button>
+      <button id="btnSave" disabled>Save CSV</button>
+      <button id="btnLoad">Replay CSV</button>
+      <input type="file" id="file" accept=".csv,text/csv" hidden>
+    </div>
+
+    <details>
+      <summary>Filter tuning</summary>
+      <label class="s">Baro noise σ (m) <output id="oR"></output>
+        <input type="range" id="sR" min="0.05" max="1.5" step="0.05" value="0.30"></label>
+      <label class="s">Baro-only smoothing q (lower = smoother, slower) <output id="oQ"></output>
+        <input type="range" id="sQ" min="-2" max="1.5" step="0.1" value="-0.3"></label>
+      <label class="s">IMU accel noise σ (m/s²) <output id="oSa"></output>
+        <input type="range" id="sSa" min="0.05" max="2" step="0.05" value="0.35"></label>
+      <label class="s">Accel bias drift (m/s²/√s) <output id="oSb"></output>
+        <input type="range" id="sSb" min="0.001" max="0.1" step="0.001" value="0.02"></label>
+      <label class="s">Gyro filter: level-flight correction Kp (lower = trust gyro more) <output id="oKp"></output>
+        <input type="range" id="sKp" min="0.05" max="3" step="0.05" value="1.00"></label>
+      <label class="s">Gyro filter: gyro-bias learning Ki <output id="oKi"></output>
+        <input type="range" id="sKi" min="0" max="0.1" step="0.002" value="0.020"></label>
+      <div class="note">Tuning changes apply live. For a recording: change, then replay again.</div>
+    </details>
+
+    <details>
+      <summary>How to test</summary>
+      <ol class="help">
+        <li>Host on HTTPS (GitHub Pages) and open in <b>Chrome on Android</b>. iPhone Safari lacks Web Bluetooth (IMU and simulator still work).</li>
+        <li>Disconnect Bora from XCTrack/FlyGineer first – one BLE connection at a time.</li>
+        <li><b>Tape Bora to the phone</b> so both feel the same motion.</li>
+        <li>Still for 10 s → compare jitter. Lift ~1 m up/down, stairs or elevator → compare lag.</li>
+        <li><b>Turn test:</b> walk in tight circles holding the pair tilted ~30°. Baro + acc will show false climb/sink; baro + acc + gyro should stay put.</li>
+        <li>Record a real flight with the phone in the cockpit and replay it with different tuning.</li>
+      </ol>
+      <div class="note"><b>Baro + acc</b> = what Bora gets with just an accelerometer. <b>Baro + acc + gyro</b> = this page's own Mahony filter on raw gyro + accel, i.e. what Bora would compute with a 6-axis IMU (no magnetometer). <b>Baro + OS fusion</b> = Android's own orientation sensor, the reference.</div>
+    </details>
+  </div>
+
+  <div class="panel">
+    <div class="row" style="justify-content:space-between">
+      <div class="legend" id="legend"></div>
+      <select id="selWin" aria-label="Window">
+        <option value="10">10 s</option>
+        <option value="20" selected>20 s</option>
+        <option value="60">60 s</option>
+        <option value="all">All</option>
+      </select>
+    </div>
+    <canvas id="chart" style="margin-top:8px"></canvas>
+    <div id="verdict" class="note">Waiting for data…</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// ================= constants & helpers =================
+const NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const NUS_TX      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+const G = 9.80665, D2R = Math.PI / 180;
+const $ = id => document.getElementById(id);
+const now = () => performance.now() / 1000;
+const altFromP = p => 44330 * (1 - Math.pow(p / 101325, 1 / 5.255));
+const KEYS = ["baro", "acc", "gyro", "os"];
+const NAMES = { baro: "Baro only", acc: "Baro + acc", gyro: "Baro + acc + gyro", os: "Baro + OS fusion", truth: "True (sim)" };
+const css = k => getComputedStyle(document.documentElement).getPropertyValue("--" + k).trim();
+
+// ================= tuning =================
+const cfg = { r: .3, q: .5, sa: .35, sb: .02, kp: 1, ki: .02 };
+function bindSlider(id, out, fmt, set) {
+  const s = $(id), o = $(out);
+  const upd = () => { const v = parseFloat(s.value); set(v); o.textContent = fmt(v); };
+  s.addEventListener("input", upd); upd();
+}
+bindSlider("sR", "oR", v => v.toFixed(2), v => cfg.r = v);
+bindSlider("sQ", "oQ", v => Math.pow(10, v).toFixed(2), v => cfg.q = Math.pow(10, v));
+bindSlider("sSa", "oSa", v => v.toFixed(2), v => cfg.sa = v);
+bindSlider("sSb", "oSb", v => v.toFixed(3), v => cfg.sb = v);
+bindSlider("sKp", "oKp", v => v.toFixed(2), v => cfg.kp = v);
+bindSlider("sKi", "oKi", v => v.toFixed(3), v => cfg.ki = v);
+
+// ================= small vector / quaternion math =================
+const qmul = (a, b) => [
+  a[0]*b[0] - a[1]*b[1] - a[2]*b[2] - a[3]*b[3],
+  a[0]*b[1] + a[1]*b[0] + a[2]*b[3] - a[3]*b[2],
+  a[0]*b[2] - a[1]*b[3] + a[2]*b[0] + a[3]*b[1],
+  a[0]*b[3] + a[1]*b[2] - a[2]*b[1] + a[3]*b[0]];
+const qnorm = q => { const n = Math.hypot(...q) || 1; return q.map(x => x / n); };
+// rotate device-frame vector v into earth frame with q (device -> earth)
+function qrot(q, v) {
+  const [w, x, y, z] = q;
+  return [
+    (1 - 2*(y*y + z*z))*v[0] + 2*(x*y - w*z)*v[1] + 2*(x*z + w*y)*v[2],
+    2*(x*y + w*z)*v[0] + (1 - 2*(x*x + z*z))*v[1] + 2*(y*z - w*x)*v[2],
+    2*(x*z - w*y)*v[0] + 2*(y*z + w*x)*v[1] + (1 - 2*(x*x + y*y))*v[2]];
+}
+const cross = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+
+// ================= Kalman filters =================
+// Baro only: state [h, v], white-noise acceleration
+class BaroKF {
+  constructor() { this.init = false; }
+  update(t, z) {
+    if (!this.init) { this.h = z; this.v = 0; this.P = [[1, 0], [0, 1]]; this.t = t; this.init = true; return; }
+    let dt = t - this.t; this.t = t; dt = Math.min(1, Math.max(1e-3, dt));
+    this.h += this.v * dt;
+    const q = cfg.q, P = this.P;
+    const p00 = P[0][0] + 2*dt*P[0][1] + dt*dt*P[1][1] + q*dt*dt*dt/3;
+    const p01 = P[0][1] + dt*P[1][1] + q*dt*dt/2;
+    const p11 = P[1][1] + q*dt;
+    const S = p00 + cfg.r*cfg.r, k0 = p00 / S, k1 = p01 / S, y = z - this.h;
+    this.h += k0*y; this.v += k1*y;
+    this.P = [[(1-k0)*p00, (1-k0)*p01], [(1-k0)*p01, p11 - k1*p01]];
+  }
+}
+// Fused: state [h, v, accel bias]; IMU drives prediction, baro corrects
+class FusedKF {
+  constructor() { this.init = false; }
+  predict(t, a) {
+    if (!this.init || !isFinite(a)) return;
+    const dt = t - this.t; if (dt <= 0) return;
+    this.t = t; if (dt > 0.5) return;
+    const u = a - this.b, h2 = 0.5*dt*dt;
+    this.h += this.v*dt + h2*u; this.v += u*dt;
+    const P = this.P, F = [[1, dt, -h2], [0, 1, -dt], [0, 0, 1]];
+    const N = [[0,0,0],[0,0,0],[0,0,0]];
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) {
+      let s = 0; for (let k = 0; k < 3; k++) for (let l = 0; l < 3; l++) s += F[i][k]*P[k][l]*F[j][l];
+      N[i][j] = s;
+    }
+    const g = [h2, dt, 0], sa2 = cfg.sa*cfg.sa;
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) N[i][j] += sa2*g[i]*g[j];
+    N[2][2] += cfg.sb*cfg.sb*dt;
+    this.P = N;
+  }
+  update(t, z) {
+    if (!this.init) { this.h = z; this.v = 0; this.b = 0; this.t = t; this.P = [[1,0,0],[0,1,0],[0,0,.25]]; this.init = true; return; }
+    const P = this.P, S = P[0][0] + cfg.r*cfg.r, K = [P[0][0]/S, P[1][0]/S, P[2][0]/S], y = z - this.h;
+    this.h += K[0]*y; this.v += K[1]*y; this.b += K[2]*y;
+    const r0 = P[0].slice();
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) P[i][j] -= K[i]*r0[j];
+  }
+}
+
+// ================= vertical-acceleration estimators =================
+// 1) Accel only: gravity direction = slow low-pass of the accelerometer
+class AccelOnly {
+  constructor() { this.g = null; }
+  vert(a) {
+    if (!this.g) this.g = a.slice();
+    const k = 0.02; for (let i = 0; i < 3; i++) this.g[i] += k*(a[i] - this.g[i]);
+    const n = Math.hypot(...this.g) || 1;
+    return (a[0]*this.g[0] + a[1]*this.g[1] + a[2]*this.g[2]) / n - G;
+  }
+}
+// 2) Accel + gyro: Mahony complementary filter on raw gyro (rad/s) + accel → quaternion
+class Mahony {
+  constructor() { this.q = null; this.bi = [0, 0, 0]; this.t = null; }
+  vert(t, a, w) {
+    const n = Math.hypot(...a); if (!n) return NaN;
+    const u = a.map(x => x / n);
+    if (!this.q) {                      // initialise attitude from gravity
+      const c = u[2], ax = cross(u, [0, 0, 1]);
+      this.q = c < -0.999 ? [0, 1, 0, 0] : qnorm([1 + c, ...ax]);
+      this.t = t; return NaN;
+    }
+    let dt = t - this.t; this.t = t; if (!(dt > 0)) return NaN; dt = Math.min(dt, 0.1);
+    if (w) {
+      // predicted "up" in device frame vs measured specific-force direction
+      const [q0, q1, q2, q3] = this.q;
+      const vUp = [2*(q1*q3 - q0*q2), 2*(q2*q3 + q0*q1), 1 - 2*(q1*q1 + q2*q2)];
+      const e = cross(u, vUp);
+      // only trust the accelerometer as a gravity reference when unloaded and not turning
+      const trust = Math.abs(n - G) < 0.05*G && Math.hypot(...w) < 0.15 ? 1 : 0;
+      for (let i = 0; i < 3; i++) this.bi[i] += cfg.ki * e[i] * dt * trust;
+      const om = w.map((x, i) => x + (cfg.kp*e[i] + this.bi[i]) * trust);
+      const dq = qmul(this.q, [0, om[0], om[1], om[2]]);
+      this.q = qnorm(this.q.map((x, i) => x + 0.5*dq[i]*dt));
+    }
+    return qrot(this.q, a)[2] - G;
+  }
+  bank() {
+    if (!this.q) return NaN;
+    const up = qrot(this.q, [0, 0, 1]);           // device z expressed in earth frame
+    return Math.acos(Math.max(-1, Math.min(1, up[2]))) / D2R;
+  }
+}
+// 3) Phone OS fusion: W3C beta/gamma (gyro-fused by Android). Up-row of Rz(α)Rx(β)Ry(γ)
+function osVert(a, beta, gamma) {
+  const cb = Math.cos(beta), sb = Math.sin(beta), cg = Math.cos(gamma), sg = Math.sin(gamma);
+  return -cb*sg*a[0] + sb*a[1] + cb*cg*a[2] - G;
+}
+
+// ================= pipeline =================
+let F, accEst, mahony, series, lastSampleT, lastH, lastVert, truthV, accSign;
+const rate = { b: [], i: [] };
+let rec = null, recDone = null, replaying = false, lastOs = [NaN, NaN], gyroSeen = false;
+function resetAll() {
+  F = { baro: new BaroKF(), acc: new FusedKF(), gyro: new FusedKF(), os: new FusedKF() };
+  accEst = new AccelOnly(); mahony = new Mahony();
+  series = []; lastSampleT = -1; lastH = NaN; truthV = NaN; accSign = 0;
+  lastVert = { acc: NaN, gyro: NaN, os: NaN };
+}
+resetAll();
+
+function onBaro(t, p) {
+  if (rec) rec.push(`${t.toFixed(4)},P,${p.toFixed(2)}`);
+  if (!(p > 30000 && p < 120000)) return;
+  const h = altFromP(p); lastH = h;
+  F.baro.update(t, h);
+  for (const k of ["acc", "gyro", "os"]) {
+    if (F[k].init) F[k].predict(t, lastVert[k]);
+    if (F[k].init || isFinite(lastVert[k])) F[k].update(t, h);
+  }
+  if (!replaying) bump(rate.b, t);
+  sample(t);
+}
+// a: accelerationIncludingGravity [x,y,z] m/s²; w: rotationRate [x,y,z] rad/s or null; ob/og: OS beta/gamma rad or NaN
+function onMotion(t, a, w, ob, og) {
+  if (rec) rec.push(`${t.toFixed(4)},M,${a.map(x => x.toFixed(4)).join(",")},${w ? w.map(x => x.toFixed(5)).join(",") : ",,"},${isFinite(ob) ? ob.toFixed(5) : ""},${isFinite(og) ? og.toFixed(5) : ""}`);
+  // sign convention: Android reports +g face-up, iOS −g. Decide once.
+  if (accSign === 0) {
+    if (isFinite(ob)) accSign = osVert(a, ob, og) + G > 0 ? 1 : -1;
+    else accSign = /iPhone|iPad|iPod/.test(navigator.userAgent) ? -1 : 1;
+  }
+  if (accSign < 0) a = a.map(x => -x);
+  if (w) gyroSeen = true;
+  lastVert.acc  = accEst.vert(a);
+  lastVert.gyro = w ? mahony.vert(t, a, w) : NaN;
+  lastVert.os   = isFinite(ob) ? osVert(a, ob, og) : NaN;
+  lastOs = [ob, og];
+  for (const k of ["acc", "gyro", "os"]) F[k].predict(t, lastVert[k]);
+  if (!replaying) bump(rate.i, t);
+  sample(t);
+}
+function sample(t) {
+  if (!F.baro.init || t - lastSampleT < 0.05) return;
+  lastSampleT = t;
+  const s = { t, tr: truthV };
+  for (const k of KEYS) s[k] = F[k].init ? F[k].v : NaN;
+  series.push(s);
+  if (!replaying && series.length > 12000) series.splice(0, 2000);
+}
+function bump(arr, t) { arr.push(t); while (arr.length && t - arr[0] > 2) arr.shift(); }
+const hz = arr => arr.length > 1 ? ((arr.length - 1) / (arr[arr.length - 1] - arr[0])).toFixed(0) : "–";
+
+// ================= Bora over Web Bluetooth (Nordic UART, $LK8EX1) =================
+let bleDev = null, lineBuf = "";
+$("btnBora").onclick = async () => {
+  if (bleDev && bleDev.gatt.connected) { bleDev.gatt.disconnect(); return; }
+  if (!navigator.bluetooth) { setStatus("No Web Bluetooth here. Use Chrome on Android over HTTPS.", true); return; }
+  try {
+    stopSim();
+    bleDev = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: "Bora" }, { services: [NUS_SERVICE] }], optionalServices: [NUS_SERVICE] });
+    bleDev.addEventListener("gattserverdisconnected", () => {
+      $("btnBora").textContent = "Connect Bora"; $("btnBora").classList.remove("on"); setStatus("Bora disconnected.", true);
+    });
+    setStatus("Connecting to " + bleDev.name + "…");
+    const svc = await (await bleDev.gatt.connect()).getPrimaryService(NUS_SERVICE);
+    const ch = await svc.getCharacteristic(NUS_TX);
+    ch.addEventListener("characteristicvaluechanged", e => onBleChunk(new TextDecoder().decode(e.target.value)));
+    await ch.startNotifications();
+    resetAll();
+    $("btnBora").textContent = "Disconnect"; $("btnBora").classList.add("on");
+    setStatus("Bora connected: " + bleDev.name, false, true); keepAwake();
+  } catch (err) { setStatus("Bluetooth: " + err.message, true); }
+};
+function onBleChunk(s) {
+  const t = now(); lineBuf += s; let i;
+  while ((i = lineBuf.indexOf("\n")) >= 0) { parseNmea(lineBuf.slice(0, i).trim(), t); lineBuf = lineBuf.slice(i + 1); }
+  if (lineBuf.length > 400) lineBuf = "";
+}
+function parseNmea(line, t) {
+  const m = /^\$([^*]+)\*([0-9a-fA-F]{1,2})$/.exec(line); if (!m) return;
+  let cs = 0; for (const c of m[1]) cs ^= c.charCodeAt(0);
+  if (cs !== parseInt(m[2], 16)) return;
+  const f = m[1].split(",");
+  if (f[0] === "LK8EX1") onBaro(t, parseFloat(f[1]));   // pressure in Pa
+}
+
+// ================= phone IMU =================
+let imuOn = false, oBeta = NaN, oGamma = NaN;
+$("btnImu").onclick = async () => {
+  if (imuOn) {
+    removeEventListener("devicemotion", onDevMotion); removeEventListener("deviceorientation", onDevOrient);
+    imuOn = false; $("btnImu").textContent = "Start phone IMU"; $("btnImu").classList.remove("on"); return;
+  }
+  try {
+    if (typeof DeviceMotionEvent === "undefined") throw new Error("no motion sensors in this browser");
+    if (DeviceMotionEvent.requestPermission) {
+      // iOS: ask for both in the same tap – a second await can lose the user gesture
+      if (!window.isSecureContext) throw new Error("needs HTTPS – open the page from GitHub Pages, not as a local file");
+      const asks = [DeviceMotionEvent.requestPermission()];
+      if (typeof DeviceOrientationEvent !== "undefined" && DeviceOrientationEvent.requestPermission) asks.push(DeviceOrientationEvent.requestPermission());
+      const res = await Promise.all(asks.map(p => p.catch(e => "error: " + e.message)));
+      if (res[0] !== "granted") throw new Error(
+        "motion permission " + res[0] + ". Open the page directly in Safari (not inside another app's preview). " +
+        "If you tapped Deny before: close all Safari tabs for this site, or clear its data in Settings › Safari › Advanced › Website Data, then reload and tap Allow.");
+    }
+    stopSim();
+    addEventListener("devicemotion", onDevMotion); addEventListener("deviceorientation", onDevOrient);
+    imuOn = true; $("btnImu").textContent = "Stop IMU"; $("btnImu").classList.add("on"); keepAwake();
+    setTimeout(() => { if (imuOn && rate.i.length < 2) setStatus("No IMU events – needs HTTPS on a phone or tablet.", true); }, 2500);
+  } catch (err) { setStatus("IMU: " + err.message, true); }
+};
+function onDevOrient(e) { if (e.beta != null) { oBeta = e.beta * D2R; oGamma = e.gamma * D2R; } }
+function onDevMotion(e) {
+  const a = e.accelerationIncludingGravity; if (!a || a.x == null) return;
+  const r = e.rotationRate;
+  // W3C: alpha = about z, beta = about x, gamma = about y, deg/s → device [x,y,z] rad/s
+  const w = r && r.alpha != null ? [r.beta * D2R, r.gamma * D2R, r.alpha * D2R] : null;
+  onMotion(now(), [a.x, a.y, a.z], w, oBeta, oGamma);
+}
+
+// ================= simulator: straight glide with gusts, then 30° thermalling turns =================
+let simTimer = null;
+$("btnSim").onclick = () => simTimer ? stopSim() : startSim();
+function startSim() {
+  resetAll();
+  const t0 = now(); let ts = 0, h = 800, v = NaN, psi = 0, phi = 0, nextB = 0;
+  const pend = [], gb = [0.004, -0.006, 0.003], ab = [0.10, -0.08, 0.15];
+  const gauss = () => Math.sqrt(-2*Math.log(Math.random() + 1e-12)) * Math.cos(2*Math.PI*Math.random());
+  const smooth = x => x <= 0 ? 0 : x >= 1 ? 1 : x*x*(3 - 2*x);
+  // 50 s cycle: 0–15 s straight, 15–19 roll in, 19–42 circling, 42–46 roll out
+  const phase = s => { const c = s % 50; return smooth((c - 15)/4) - smooth((c - 42)/4); };
+  const vTrue = s => -1.0 + 0.5*Math.sin(1.7*s) + phase(s)*(2.2 + 0.8*Math.sin(2*Math.PI*s/7.5));
+  const Rz = p => [[Math.cos(p), -Math.sin(p), 0], [Math.sin(p), Math.cos(p), 0], [0, 0, 1]];
+  const Ry = p => [[Math.cos(p), 0, Math.sin(p)], [0, 1, 0], [-Math.sin(p), 0, Math.cos(p)]];
+  const mm = (A, B) => A.map((r, i) => B[0].map((_, j) => r[0]*B[0][j] + r[1]*B[1][j] + r[2]*B[2][j]));
+  const mtv = (A, x) => [0, 1, 2].map(j => A[0][j]*x[0] + A[1][j]*x[1] + A[2][j]*x[2]);   // Aᵀx
+  simTimer = setInterval(() => {
+    const tEnd = now() - t0;
+    while (ts < tEnd) {
+      const dt = 0.016; ts += dt;
+      if (isNaN(v)) v = vTrue(0);
+      const vn = vTrue(ts), az = (vn - v)/dt; v = vn; h += v*dt; truthV = v;
+      const phiN = 30*D2R*phase(ts), dphi = (phiN - phi)/dt; phi = phiN;
+      const dpsi = -G*Math.tan(phi)/11;                       // coordinated right turn at 11 m/s
+      psi += dpsi*dt;
+      const R = mm(Rz(psi), Ry(phi));                          // device → earth (y forward, bank about y)
+      // specific force in earth frame: centripetal + gravity + vertical accel; in body it lies along device z
+      const right = [R[0][0], R[1][0], 0], hr = Math.hypot(right[0], right[1]) || 1;
+      const fe = [right[0]/hr*G*Math.tan(phi), right[1]/hr*G*Math.tan(phi), G + az];
+      const fd = mtv(R, fe).map((x, i) => x + ab[i] + 0.2*gauss());
+      const wWorld = [-Math.sin(psi)*dphi, Math.cos(psi)*dphi, dpsi];   // ψ̇ about z + φ̇ about rotated y
+      const wd = mtv(R, wWorld).map((x, i) => x + gb[i] + 0.01*gauss());
+      // OS orientation = W3C Euler from R (third row → beta, gamma)
+      const ob = Math.asin(Math.max(-1, Math.min(1, R[2][1]))) + 0.5*D2R*gauss(), og = Math.atan2(-R[2][0], R[2][2]) + 0.5*D2R*gauss();
+      onMotion(t0 + ts, fd, wd, ob, og);
+      if (ts >= nextB) {                                        // Bora: 12 Hz, σ 0.25 m, 70 ms BLE latency
+        nextB += 1/12;
+        pend.push([t0 + ts + 0.07, 101325*Math.pow(1 - (h + 0.25*gauss())/44330, 5.255)]);
+      }
+      while (pend.length && pend[0][0] <= t0 + ts) { const [tb, p] = pend.shift(); onBaro(tb, p); }
+    }
+  }, 10);
+  $("btnSim").textContent = "Stop sim"; $("btnSim").classList.add("on");
+  setStatus("Simulator: 15 s straight with gusts, then 30° bank thermalling. White = true climb.", false, true);
+}
+function stopSim() {
+  if (!simTimer) return; clearInterval(simTimer); simTimer = null; truthV = NaN;
+  $("btnSim").textContent = "Simulator"; $("btnSim").classList.remove("on");
+}
+
+// ================= record / replay =================
+$("btnRec").onclick = () => {
+  if (rec) {
+    recDone = rec; rec = null;
+    $("btnRec").textContent = "● Record"; $("btnRec").classList.remove("on"); $("btnSave").disabled = recDone.length < 3;
+  } else {
+    rec = ["# imu-vario-lab v2: t,P,pressure_Pa | t,M,ax,ay,az(m/s2 incl g),wx,wy,wz(rad/s),os_beta,os_gamma(rad)"];
+    $("btnRec").textContent = "■ Stop rec"; $("btnRec").classList.add("on"); $("btnSave").disabled = true;
+  }
+};
+$("btnSave").onclick = () => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([recDone.join("\n")], { type: "text/csv" }));
+  a.download = "vario-imu-" + new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-") + ".csv";
+  a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+$("btnLoad").onclick = () => $("file").click();
+$("file").onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  const lines = (await f.text()).split(/\r?\n/);
+  stopSim(); resetAll(); replaying = true;
+  const num = x => x === "" || x == null ? NaN : parseFloat(x);
+  for (const ln of lines) {
+    if (!ln || ln[0] === "#") continue;
+    const c = ln.split(","), t = num(c[0]);
+    if (c[1] === "P") onBaro(t, num(c[2]));
+    else if (c[1] === "M") {
+      const w = c[5] !== "" ? [num(c[5]), num(c[6]), num(c[7])] : null;
+      onMotion(t, [num(c[2]), num(c[3]), num(c[4])], w, num(c[8]), num(c[9]));
+    }
+  }
+  replaying = false; $("selWin").value = "all";
+  setStatus(`Replayed ${f.name}: ${series.length} samples. Adjust tuning, then replay again.`, false, true);
+  e.target.value = "";
+};
+
+// ================= audio =================
+let actx = null, osc, gain, ph = 0, lastAT = 0;
+$("selAudio").onchange = () => {
+  if (!actx) {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    osc = actx.createOscillator(); gain = actx.createGain();
+    osc.type = "square"; gain.gain.value = 0; osc.connect(gain).connect(actx.destination); osc.start();
+  }
+  actx.resume();
+};
+setInterval(() => {
+  if (!actx) return;
+  const k = $("selAudio").value, t = now(), dt = Math.min(0.1, t - lastAT); lastAT = t;
+  const v = F[k] && F[k].init ? F[k].v : NaN;
+  let g = 0, f = 600;
+  if (v > 0.15) {
+    f = Math.min(1600, 600 + 120*v);
+    ph = (ph + dt / Math.max(0.12, 0.55 - 0.07*v)) % 1; g = ph < 0.5 ? 0.08 : 0;
+  } else if (v < -2.5) { f = Math.max(180, 320 + 20*v); g = 0.05; ph = 0; }
+  else ph = 0;
+  osc.frequency.setTargetAtTime(f, actx.currentTime, 0.01);
+  gain.gain.setTargetAtTime(g, actx.currentTime, 0.005);
+}, 15);
+
+// ================= analysis =================
+function analyse() {
+  if (series.length < 60) return null;
+  const tEnd = series[series.length - 1].t, s = series.filter(p => p.t > tEnd - 30);
+  if (s.length < 60) return null;
+  const hasTruth = s.every(p => isFinite(p.tr));
+  const out = {};
+  for (const k of KEYS) {
+    const ok = s.filter(p => isFinite(p[k]));
+    if (ok.length < 60) continue;
+    // jitter: residual vs 0.35 s centred mean
+    let j = 0, n = 0;
+    for (let i = 3; i < ok.length - 3; i++) { let m = 0; for (let d = -3; d <= 3; d++) m += ok[i + d][k]; j += (ok[i][k] - m/7)**2; n++; }
+    const r = { jit: Math.sqrt(j / n), lag: NaN, rms: NaN };
+    if (hasTruth) r.rms = Math.sqrt(ok.reduce((a, p) => a + (p[k] - p.tr)**2, 0) / ok.length);
+    if (k !== "baro") r.lag = bestLag(s, k);
+    out[k] = r;
+  }
+  return { out, hasTruth };
+}
+// how far (s) the baro-only signal trails signal k
+function bestLag(s, k) {
+  const ok = s.filter(p => isFinite(p[k]) && isFinite(p.baro));
+  const mb = ok.reduce((a, p) => a + p.baro, 0)/ok.length, mk = ok.reduce((a, p) => a + p[k], 0)/ok.length;
+  let best = -Infinity, bk = 0;
+  for (let d = 0; d <= 30; d++) {
+    let num = 0, x2 = 0, y2 = 0;
+    for (let i = 0; i + d < ok.length; i++) { const x = ok[i][k] - mk, y = ok[i + d].baro - mb; num += x*y; x2 += x*x; y2 += y*y; }
+    const c = num / Math.sqrt(x2*y2 || 1); if (c > best) { best = c; bk = d; }
+  }
+  return bk * 0.05;
+}
+function verdict() {
+  const r = analyse(), el = $("verdict");
+  if (!r) { el.textContent = F.baro.init && rate.i.length < 2 ? "Baro data arriving. Start the phone IMU to see the fused varios." : "Waiting for data…"; return; }
+  let html = `<table><tr><th>Last 30 s</th><th>Baro lags by</th><th>Jitter m/s</th>${r.hasTruth ? "<th>Error vs true</th>" : ""}</tr>`;
+  for (const k of KEYS) {
+    const x = r.out[k];
+    if (!x) { html += `<tr><td style="color:var(--${k})">${NAMES[k]}</td><td colspan="3" style="text-align:left;color:var(--muted)">${k === "gyro" ? "no gyro data" : k === "os" ? "no orientation data" : "–"}</td></tr>`; continue; }
+    html += `<tr><td style="color:var(--${k})">${NAMES[k]}</td><td>${k === "baro" ? "–" : (x.lag*1000).toFixed(0) + " ms"}</td><td>${x.jit.toFixed(2)}</td>${r.hasTruth ? `<td>${x.rms.toFixed(2)}</td>` : ""}</tr>`;
+  }
+  html += "</table><div class='note'>Moving: lag matters (300 ms+ is felt when centering). Still: jitter matters. Turning: baro + acc drifts, baro + acc + gyro should not. " +
+    (r.hasTruth ? "Simulator: lowest error vs true wins." : "") + "</div>";
+  el.innerHTML = html;
+}
+
+// ================= chart =================
+const show = { baro: true, acc: true, gyro: true, os: true, truth: true };
+(function legend() {
+  const L = $("legend");
+  for (const k of [...KEYS, "truth"]) {
+    const b = document.createElement("button");
+    b.innerHTML = `<i style="background:var(--${k})"></i>${NAMES[k]}`;
+    b.onclick = () => { show[k] = !show[k]; b.classList.toggle("off", !show[k]); };
+    L.appendChild(b);
+  }
+})();
+const cv = $("chart"), cx = cv.getContext("2d");
+function draw() {
+  const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== W*dpr || cv.height !== H*dpr) { cv.width = W*dpr; cv.height = H*dpr; }
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0); cx.clearRect(0, 0, W, H);
+  if (!series.length) return;
+  const win = $("selWin").value, tEnd = series[series.length - 1].t;
+  const tStart = win === "all" ? series[0].t : tEnd - parseFloat(win);
+  const pts = series.filter(p => p.t >= tStart);
+  let ymax = 2;
+  for (const p of pts) for (const k of [...KEYS, "tr"]) if (isFinite(p[k])) ymax = Math.max(ymax, Math.abs(p[k]));
+  ymax = Math.ceil(ymax);
+  const X = t => 30 + (t - tStart) / Math.max(1e-3, tEnd - tStart) * (W - 36);
+  const Y = v => H/2 - v / ymax * (H/2 - 10);
+  cx.font = "11px system-ui"; cx.fillStyle = "#6c7783"; cx.lineWidth = 1;
+  for (let v = -ymax; v <= ymax; v += ymax > 4 ? 2 : 1) {
+    cx.strokeStyle = v === 0 ? "#3a434e" : "#232a33";
+    cx.beginPath(); cx.moveTo(30, Y(v)); cx.lineTo(W, Y(v)); cx.stroke(); cx.fillText(v, 6, Y(v) + 4);
+  }
+  const line = (key, col, w, dash) => {
+    cx.strokeStyle = col; cx.lineWidth = w; cx.setLineDash(dash || []); cx.beginPath(); let st = false;
+    for (const p of pts) { const v = p[key]; if (!isFinite(v)) { st = false; continue; }
+      st ? cx.lineTo(X(p.t), Y(v)) : cx.moveTo(X(p.t), Y(v)); st = true; }
+    cx.stroke(); cx.setLineDash([]);
+  };
+  if (show.truth) line("tr", css("truth"), 1.5, [5, 4]);
+  for (const k of KEYS) if (show[k]) line(k, css(k), 2);
+}
+
+// ================= UI loop =================
+const fmt = v => isFinite(v) ? (v >= 0 ? "+" : "") + v.toFixed(1) : "–.–";
+let lastV = 0;
+function ui() {
+  for (const k of KEYS) $("v_" + k).textContent = F[k].init ? fmt(F[k].v) : "–.–";
+  $("oAlt").textContent = isFinite(lastH) ? lastH.toFixed(1) + " m" : "–";
+  const b = mahony.bank(); $("oBank").textContent = isFinite(b) ? b.toFixed(0) + "°" : "–";
+  const [ob, og] = lastOs;
+  $("oBankOs").textContent = isFinite(ob) ? (Math.acos(Math.max(-1, Math.min(1, Math.cos(ob)*Math.cos(og)))) / D2R).toFixed(0) + "°" : "–";
+  $("oBhz").textContent = hz(rate.b) + " Hz"; $("oIhz").textContent = hz(rate.i) + " Hz";
+  $("oGyro").textContent = gyroSeen ? "yes" : rate.i.length ? "none!" : "–";
+  draw();
+  if (performance.now() - lastV > 1000) { lastV = performance.now(); verdict(); }
+  requestAnimationFrame(ui);
+}
+requestAnimationFrame(ui);
+
+function setStatus(msg, bad, ok) { $("status").innerHTML = `<span class="${bad ? "bad" : ok ? "ok" : ""}">${msg}</span>`; }
+async function keepAwake() { try { await navigator.wakeLock?.request("screen"); } catch (_) {} }
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && (imuOn || bleDev)) keepAwake(); });
+</script>
+</body>
+</html>

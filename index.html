@@ -76,7 +76,7 @@ summary{cursor:pointer;color:var(--muted);font-size:13px;padding:6px 0}
       <div>Bank (OS)<b id="oBankOs">–</b></div>
       <div>Baro rate<b id="oBhz">–</b></div>
       <div>IMU rate<b id="oIhz">–</b></div>
-      <div>Gyro data<b id="oGyro">–</b></div>
+      <div id="tGyro" style="cursor:pointer" title="Tap to recalibrate">Gyro axes<b id="oGyro">–</b></div>
     </div>
 
     <div class="row" style="margin-top:10px">
@@ -115,6 +115,7 @@ summary{cursor:pointer;color:var(--muted);font-size:13px;padding:6px 0}
       <ol class="help">
         <li>Host on HTTPS (GitHub Pages) and open in <b>Chrome on Android</b>. iPhone Safari lacks Web Bluetooth (IMU and simulator still work).</li>
         <li>Disconnect Bora from XCTrack/FlyGineer first – one BLE connection at a time.</li>
+        <li><b>Gyro calibration:</b> after Start phone IMU, tilt and roll the phone slowly in all directions (~10 s) until the “Gyro axes” tile shows the mapping. It is remembered; tap the tile to redo it.</li>
         <li><b>Tape Bora to the phone</b> so both feel the same motion.</li>
         <li>Still for 10 s → compare jitter. Lift ~1 m up/down, stairs or elevator → compare lag.</li>
         <li><b>Turn test:</b> walk in tight circles holding the pair tilted ~30°. Baro + acc will show false climb/sink; baro + acc + gyro should stay put.</li>
@@ -278,6 +279,65 @@ function osVert(a, beta, gamma) {
   return -cb*sg*a[0] + sb*a[1] + cb*cg*a[2] - G;
 }
 
+// ================= gyro axis auto-calibration =================
+// Browsers disagree on how rotationRate alpha/beta/gamma map to device x/y/z (and on sign/units).
+// While the phone is tilted by hand, gravity seen in the device frame must turn as du/dt = u × ω.
+// We test all 96 signed axis permutations × {deg/s, rad/s} and lock the one that fits.
+const SRC = ["α", "β", "γ"];
+class GyroMap {
+  constructor() {
+    this.cands = [];
+    const perms = [[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
+    for (const perm of perms) for (let sg = 0; sg < 8; sg++) for (const k of [D2R, 1])
+      this.cands.push({ perm, sign: [sg & 1 ? -1 : 1, sg & 2 ? -1 : 1, sg & 4 ? -1 : 1], k });
+    this.spec = this.cands.findIndex(c => c.perm.join() === "1,2,0" && c.sign.join() === "1,1,1" && c.k === D2R);
+    let saved = -1; try { saved = parseInt(localStorage.getItem("gyroMap") ?? "-1"); } catch (_) {}
+    this.cur = saved >= 0 && saved < this.cands.length ? saved : this.spec;
+    this.saved = saved >= 0;
+    this.restart();
+  }
+  restart() { this.err = new Float64Array(this.cands.length); this.base = 0; this.n = 0; this.locked = false; this.bin = null; this.prev = null; }
+  apply(r) { const c = this.cands[this.cur]; return c.perm.map((src, d) => c.sign[d] * r[src] * c.k); }
+  label(i = this.cur) { const c = this.cands[i]; return c.perm.map((src, d) => (c.sign[d] < 0 ? "−" : "") + SRC[src]).join(" ") + (c.k === 1 ? " rad" : ""); }
+  feed(t, a, r) {
+    if (this.locked || !r) return false;
+    const n = Math.hypot(...a); if (!n) return false;
+    if (!this.bin) this.bin = { t0: t, u: [0,0,0], r: [0,0,0], m: 0, ok: true };
+    const b = this.bin;
+    for (let i = 0; i < 3; i++) { b.u[i] += a[i] / n; b.r[i] += r[i]; }
+    b.m++; if (Math.abs(n - G) > 0.2 * G) b.ok = false;
+    if (t - b.t0 < 0.1) return false;
+    const cur = { t: (b.t0 + t) / 2, u: b.u.map(x => x / b.m), r: b.r.map(x => x / b.m), ok: b.ok };
+    this.bin = null;
+    const prev = this.prev; this.prev = cur;
+    if (!prev || !prev.ok || !cur.ok) return false;
+    const dt = cur.t - prev.t; if (dt <= 0 || dt > 0.3) return false;
+    const du = [0,1,2].map(i => (cur.u[i] - prev.u[i]) / dt);
+    const du2 = du[0]**2 + du[1]**2 + du[2]**2;
+    if (du2 < 0.3 * 0.3) return false;                 // need real tilting (> ~17°/s)
+    const u = [0,1,2].map(i => (cur.u[i] + prev.u[i]) / 2), rr = [0,1,2].map(i => (cur.r[i] + prev.r[i]) / 2);
+    for (let c = 0; c < this.cands.length; c++) {
+      const C = this.cands[c], w = C.perm.map((src, d) => C.sign[d] * rr[src] * C.k);
+      const p = cross(u, w);
+      this.err[c] += (du[0]-p[0])**2 + (du[1]-p[1])**2 + (du[2]-p[2])**2;
+    }
+    this.base += du2; this.n++;
+    if (this.n >= 25) {
+      let b1 = 0, b2 = -1;
+      for (let c = 1; c < this.cands.length; c++) if (this.err[c] < this.err[b1]) b1 = c;
+      for (let c = 0; c < this.cands.length; c++) if (c !== b1 && (b2 < 0 || this.err[c] < this.err[b2])) b2 = c;
+      if (this.err[b1] < 0.3 * this.base && this.err[b2] > 2.5 * this.err[b1]) {
+        this.cur = b1; this.locked = true; this.saved = true;
+        try { localStorage.setItem("gyroMap", String(b1)); } catch (_) {}
+        return true;
+      }
+    }
+    return false;
+  }
+  progress() { return this.locked ? 1 : Math.min(0.95, this.n / 25); }
+}
+const gyroMap = new GyroMap();
+
 // ================= pipeline =================
 let F, accEst, mahony, series, lastSampleT, lastH, lastVert, truthV, accSign;
 const rate = { b: [], i: [] };
@@ -302,15 +362,23 @@ function onBaro(t, p) {
   if (!replaying) bump(rate.b, t);
   sample(t);
 }
-// a: accelerationIncludingGravity [x,y,z] m/s²; w: rotationRate [x,y,z] rad/s or null; ob/og: OS beta/gamma rad or NaN
-function onMotion(t, a, w, ob, og) {
-  if (rec) rec.push(`${t.toFixed(4)},M,${a.map(x => x.toFixed(4)).join(",")},${w ? w.map(x => x.toFixed(5)).join(",") : ",,"},${isFinite(ob) ? ob.toFixed(5) : ""},${isFinite(og) ? og.toFixed(5) : ""}`);
+// a: accelerationIncludingGravity [x,y,z] m/s²; r: raw rotationRate [alpha,beta,gamma] as the browser gives it, or null;
+// w: already device-frame [x,y,z] rad/s (old v2 recordings only); ob/og: OS beta/gamma rad or NaN
+function onMotion(t, a, r, ob, og, w) {
+  if (rec) rec.push(`${t.toFixed(4)},M,${a.map(x => x.toFixed(4)).join(",")},${r ? r.map(x => x.toFixed(4)).join(",") : ",,"},${isFinite(ob) ? ob.toFixed(5) : ""},${isFinite(og) ? og.toFixed(5) : ""}`);
   // sign convention: Android reports +g face-up, iOS −g. Decide once.
   if (accSign === 0) {
     if (isFinite(ob)) accSign = osVert(a, ob, og) + G > 0 ? 1 : -1;
     else accSign = /iPhone|iPad|iPod/.test(navigator.userAgent) ? -1 : 1;
   }
   if (accSign < 0) a = a.map(x => -x);
+  if (r) {
+    if (gyroMap.feed(t, a, r)) {                       // mapping just locked: restart the gyro filter with it
+      mahony = new Mahony(); F.gyro = new FusedKF();
+      if (!replaying) setStatus("Gyro axes calibrated: " + gyroMap.label(), false, true);
+    }
+    w = gyroMap.apply(r);
+  }
   if (w) gyroSeen = true;
   lastVert.acc  = accEst.vert(a);
   lastVert.gyro = w ? mahony.vert(t, a, w) : NaN;
@@ -388,6 +456,7 @@ $("btnImu").onclick = async () => {
     stopSim();
     addEventListener("devicemotion", onDevMotion); addEventListener("deviceorientation", onDevOrient);
     imuOn = true; $("btnImu").textContent = "Stop IMU"; $("btnImu").classList.add("on"); keepAwake();
+    if (!gyroMap.locked && !gyroMap.saved) setStatus("IMU on. Tilt and roll the phone slowly in all directions for ~10 s to calibrate the gyro axes.", false);
     setTimeout(() => { if (imuOn && rate.i.length < 2) setStatus("No IMU events – needs HTTPS on a phone or tablet.", true); }, 2500);
   } catch (err) { setStatus("IMU: " + err.message, true); }
 };
@@ -395,16 +464,15 @@ function onDevOrient(e) { if (e.beta != null) { oBeta = e.beta * D2R; oGamma = e
 function onDevMotion(e) {
   const a = e.accelerationIncludingGravity; if (!a || a.x == null) return;
   const r = e.rotationRate;
-  // W3C: alpha = about z, beta = about x, gamma = about y, deg/s → device [x,y,z] rad/s
-  const w = r && r.alpha != null ? [r.beta * D2R, r.gamma * D2R, r.alpha * D2R] : null;
-  onMotion(now(), [a.x, a.y, a.z], w, oBeta, oGamma);
+  const raw = r && r.alpha != null ? [r.alpha, r.beta, r.gamma] : null;   // mapping to x/y/z is auto-calibrated
+  onMotion(now(), [a.x, a.y, a.z], raw, oBeta, oGamma);
 }
 
 // ================= simulator: straight glide with gusts, then 30° thermalling turns =================
 let simTimer = null;
 $("btnSim").onclick = () => simTimer ? stopSim() : startSim();
 function startSim() {
-  resetAll();
+  resetAll(); gyroMap.cur = gyroMap.spec; gyroMap.locked = true;
   const t0 = now(); let ts = 0, h = 800, v = NaN, psi = 0, phi = 0, nextB = 0;
   const pend = [], gb = [0.004, -0.006, 0.003], ab = [0.10, -0.08, 0.15];
   const gauss = () => Math.sqrt(-2*Math.log(Math.random() + 1e-12)) * Math.cos(2*Math.PI*Math.random());
@@ -434,7 +502,7 @@ function startSim() {
       const wd = mtv(R, wWorld).map((x, i) => x + gb[i] + 0.01*gauss());
       // OS orientation = W3C Euler from R (third row → beta, gamma)
       const ob = Math.asin(Math.max(-1, Math.min(1, R[2][1]))) + 0.5*D2R*gauss(), og = Math.atan2(-R[2][0], R[2][2]) + 0.5*D2R*gauss();
-      onMotion(t0 + ts, fd, wd, ob, og);
+      onMotion(t0 + ts, fd, [wd[2] / D2R, wd[0] / D2R, wd[1] / D2R], ob, og);   // W3C-spec raw α β γ in deg/s
       if (ts >= nextB) {                                        // Bora: 12 Hz, σ 0.25 m, 70 ms BLE latency
         nextB += 1/12;
         pend.push([t0 + ts + 0.07, 101325*Math.pow(1 - (h + 0.25*gauss())/44330, 5.255)]);
@@ -456,7 +524,7 @@ $("btnRec").onclick = () => {
     recDone = rec; rec = null;
     $("btnRec").textContent = "● Record"; $("btnRec").classList.remove("on"); $("btnSave").disabled = recDone.length < 3;
   } else {
-    rec = ["# imu-vario-lab v2: t,P,pressure_Pa | t,M,ax,ay,az(m/s2 incl g),wx,wy,wz(rad/s),os_beta,os_gamma(rad)"];
+    rec = ["# imu-vario-lab v3: t,P,pressure_Pa | t,M,ax,ay,az(m/s2 incl g),rot_alpha,rot_beta,rot_gamma(raw browser values),os_beta,os_gamma(rad)"];
     $("btnRec").textContent = "■ Stop rec"; $("btnRec").classList.add("on"); $("btnSave").disabled = true;
   }
 };
@@ -471,17 +539,21 @@ $("file").onchange = async e => {
   const f = e.target.files[0]; if (!f) return;
   const lines = (await f.text()).split(/\r?\n/);
   stopSim(); resetAll(); replaying = true;
+  const v2 = lines[0].includes("v2"), keepMap = gyroMap.cur;
+  if (!v2) gyroMap.restart();
   const num = x => x === "" || x == null ? NaN : parseFloat(x);
   for (const ln of lines) {
     if (!ln || ln[0] === "#") continue;
     const c = ln.split(","), t = num(c[0]);
     if (c[1] === "P") onBaro(t, num(c[2]));
     else if (c[1] === "M") {
-      const w = c[5] !== "" ? [num(c[5]), num(c[6]), num(c[7])] : null;
-      onMotion(t, [num(c[2]), num(c[3]), num(c[4])], w, num(c[8]), num(c[9]));
+      const g3 = c[5] !== "" ? [num(c[5]), num(c[6]), num(c[7])] : null;
+      if (v2) onMotion(t, [num(c[2]), num(c[3]), num(c[4])], null, num(c[8]), num(c[9]), g3);
+      else onMotion(t, [num(c[2]), num(c[3]), num(c[4])], g3, num(c[8]), num(c[9]));
     }
   }
   replaying = false; $("selWin").value = "all";
+  if (!v2 && !gyroMap.locked) gyroMap.cur = keepMap;
   setStatus(`Replayed ${f.name}: ${series.length} samples. Adjust tuning, then replay again.`, false, true);
   e.target.value = "";
 };
@@ -606,13 +678,20 @@ function ui() {
   const [ob, og] = lastOs;
   $("oBankOs").textContent = isFinite(ob) ? (Math.acos(Math.max(-1, Math.min(1, Math.cos(ob)*Math.cos(og)))) / D2R).toFixed(0) + "°" : "–";
   $("oBhz").textContent = hz(rate.b) + " Hz"; $("oIhz").textContent = hz(rate.i) + " Hz";
-  $("oGyro").textContent = gyroSeen ? "yes" : rate.i.length ? "none!" : "–";
+  $("oGyro").textContent = !gyroSeen ? (rate.i.length ? "none!" : "–")
+    : gyroMap.locked ? gyroMap.label() : `tilt ${Math.round(gyroMap.progress() * 100)}%`;
+  $("v_gyro").style.opacity = gyroSeen && !gyroMap.locked && !gyroMap.saved ? 0.4 : 1;
   draw();
   if (performance.now() - lastV > 1000) { lastV = performance.now(); verdict(); }
   requestAnimationFrame(ui);
 }
 requestAnimationFrame(ui);
 
+$("tGyro").onclick = () => {
+  if (simTimer) return;
+  gyroMap.restart(); try { localStorage.removeItem("gyroMap"); } catch (_) {} gyroMap.saved = false;
+  setStatus("Gyro calibration: tilt and roll the phone slowly in all directions for ~10 s.", false);
+};
 function setStatus(msg, bad, ok) { $("status").innerHTML = `<span class="${bad ? "bad" : ok ? "ok" : ""}">${msg}</span>`; }
 async function keepAwake() { try { await navigator.wakeLock?.request("screen"); } catch (_) {} }
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && (imuOn || bleDev)) keepAwake(); });

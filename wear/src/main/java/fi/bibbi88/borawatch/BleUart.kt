@@ -62,6 +62,7 @@ class BleUart(private val ctx: Context, private val onStatus: (String) -> Unit) 
                     queue.removeAll { it.first == device }
                     busy = false
                 }
+                Unit
             }
             report()
         }

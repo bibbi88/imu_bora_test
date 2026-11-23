@@ -1,0 +1,41 @@
+name: Build watch app
+
+on:
+  push:
+    paths:
+      - 'wear/**'
+      - '.github/workflows/wear.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build APK
+        working-directory: wear
+        run: gradle assembleDebug --stacktrace
+
+      - name: Publish as release "watch-latest"
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp wear/build/outputs/apk/debug/*.apk BoraWatch.apk
+          gh release delete watch-latest --yes --cleanup-tag || true
+          gh release create watch-latest BoraWatch.apk \
+            --title "Bora Watch – latest build" \
+            --notes "Wear OS test app (Galaxy Watch4+). Built from ${{ github.sha }}." \
+            --prerelease

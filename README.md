@@ -16,3 +16,14 @@ Includes a turning-flight simulator, live lag/jitter comparison, audio beeper pe
 Open via GitHub Pages (HTTPS required) in **Chrome on Android**. iOS Safari has no Web Bluetooth (IMU and simulator still work; Bluefy browser can connect to Bora).
 
 Disconnect Bora from XCTrack/FlyGineer first, and tape Bora to the phone so both feel the same motion.
+
+## Bora Watch (Wear OS test app)
+
+`wear/` is a Galaxy Watch4+ app that turns the watch into a Bora-compatible vario:
+it reads the watch barometer + IMU, runs the same filters as the web lab
+(Baro only / Baro + acc / Baro + acc + gyro) and sends `$LK8EX1` over the
+Nordic UART BLE service at 10 Hz, so FlyGineer, XCTrack and the web lab connect to it like to Bora.
+Optional beeper on the watch.
+
+The APK is built by GitHub Actions on every change in `wear/` and published as the
+[`watch-latest` release](../../releases/tag/watch-latest).

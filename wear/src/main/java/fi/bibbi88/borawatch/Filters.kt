@@ -6,6 +6,9 @@ const val G = 9.80665
 
 fun altFromPa(p: Double): Double = 44330.0 * (1.0 - (p / 101325.0).pow(1.0 / 5.255))
 
+/** Exact inverse of altFromPa. */
+fun paFromAlt(h: Double): Double = 101325.0 * (1.0 - h / 44330.0).pow(5.255)
+
 /** Tuning, same defaults as the web lab. */
 object Cfg {
     var baroSigma = 0.30      // m

@@ -166,13 +166,23 @@ class MainActivity : Activity(), SensorEventListener {
     private val sendTask = object : Runnable {
         override fun run() {
             var pa = lastPa
+            var alt = lastAlt
+            // XCTrack computes climb from the pressure field and ignores the vario field,
+            // so in the IMU modes send the pressure that matches the fused altitude.
+            val hFused = when {
+                xcTest -> Double.NaN
+                mode == 1 && fAcc.init -> fAcc.h
+                mode == 2 && fGyro.init -> fGyro.h
+                else -> Double.NaN
+            }
+            if (!hFused.isNaN()) { pa = paFromAlt(hFused); alt = hFused }
             if (xcTest && !testPa.isNaN()) pa = testPa
             if (!pa.isNaN()) {
                 val v = if (xcTest) 2.0 * Math.sin(2 * Math.PI * (System.currentTimeMillis() - testT0) / 20000.0) else climb(mode)
                 val vario = if (v.isNaN()) "9999" else (v * 100).roundToInt().toString()
                 val bat = (getSystemService(Context.BATTERY_SERVICE) as BatteryManager)
                     .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
-                val body = "LK8EX1,${pa.roundToInt()},${lastAlt.roundToInt()},$vario,99,${1000 + bat.coerceIn(0, 100)},"
+                val body = "LK8EX1,${pa.roundToInt()},${alt.roundToInt()},$vario,99,${1000 + bat.coerceIn(0, 100)},"
                 var cs = 0; for (c in body) cs = cs xor c.code
                 ble?.send("\$$body*${String.format(Locale.US, "%02X", cs)}\r\n")
             }

@@ -11,8 +11,8 @@ android {
         applicationId = "fi.bibbi88.borawatch"
         minSdk = 30          // Wear OS 3 (Galaxy Watch4 and newer)
         targetSdk = 34
-        versionCode = 3
-        versionName = "0.3"
+        versionCode = 4
+        versionName = "0.4"
     }
 
     // Fixed key so new builds install over the old one without uninstalling

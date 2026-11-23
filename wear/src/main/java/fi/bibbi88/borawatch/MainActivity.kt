@@ -32,6 +32,10 @@ class MainActivity : Activity(), SensorEventListener {
     private val modeNames = arrayOf("Baro only", "Baro + acc", "Baro + acc + gyro")
     private val modeColors = intArrayOf(0xFFF0A24A.toInt(), 0xFFC48BFF.toInt(), 0xFF4FB3FF.toInt())
     @Volatile private var mode = 2
+    // XCTrack test: pressure frozen, vario field = fake ±2 m/s sine (20 s period)
+    @Volatile private var xcTest = false
+    private var testPa = Double.NaN
+    private var testT0 = 0L
 
     // ---------- filters (touched only on the sensor thread) ----------
     private val baro = BaroKF()
@@ -161,9 +165,10 @@ class MainActivity : Activity(), SensorEventListener {
     // ---------- $LK8EX1 at 10 Hz, same as Bora ----------
     private val sendTask = object : Runnable {
         override fun run() {
-            val pa = lastPa
+            var pa = lastPa
+            if (xcTest && !testPa.isNaN()) pa = testPa
             if (!pa.isNaN()) {
-                val v = climb(mode)
+                val v = if (xcTest) 2.0 * Math.sin(2 * Math.PI * (System.currentTimeMillis() - testT0) / 20000.0) else climb(mode)
                 val vario = if (v.isNaN()) "9999" else (v * 100).roundToInt().toString()
                 val bat = (getSystemService(Context.BATTERY_SERVICE) as BatteryManager)
                     .getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -182,7 +187,11 @@ class MainActivity : Activity(), SensorEventListener {
         override fun run() {
             tvMain.text = fmt(climb(mode))
             tvMain.setTextColor(modeColors[mode])
-            tvMode.text = modeNames[mode]
+            tvMode.text = if (xcTest) "XCTRACK TEST" else modeNames[mode]
+            if (xcTest) {
+                val f = 2.0 * Math.sin(2 * Math.PI * (System.currentTimeMillis() - testT0) / 20000.0)
+                tvMain.text = fmt(f); tvMain.setTextColor(Color.RED)
+            }
             tvAll.text = "B ${fmt(climb(0))}  A ${fmt(climb(1))}  G ${fmt(climb(2))}"
             val alt = if (lastAlt.isNaN()) "–" else "${lastAlt.roundToInt()} m"
             tvInfo.text = "$alt · P $hzP Hz · IMU $hzA Hz"
@@ -215,7 +224,12 @@ class MainActivity : Activity(), SensorEventListener {
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply { setMargins(4, 6, 4, 0) }
         }
-        btnMode = button("Mode") { mode = (mode + 1) % 3 }
+        btnMode = button("Mode") { if (xcTest) xcTest = false else mode = (mode + 1) % 3 }
+        btnMode.setOnLongClickListener {
+            xcTest = !xcTest
+            if (xcTest) { testPa = lastPa; testT0 = System.currentTimeMillis() }
+            true
+        }
         btnBeep = button("Beep: off") {
             beepOn = !beepOn
             if (beepOn) beeper.start() else beeper.stop()
